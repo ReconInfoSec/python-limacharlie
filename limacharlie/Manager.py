@@ -1,5 +1,7 @@
 # Detect if this is Python 2 or 3
 import sys
+import os
+import shlex
 _IS_PYTHON_2 = False
 if sys.version_info[ 0 ] < 3:
     _IS_PYTHON_2 = True
@@ -17,13 +19,16 @@ else:
     from urllib.parse import urlencode
     from urllib.parse import quote as urlescape
 
+from typing import Any
+
 import uuid
-import json
 import traceback
 import cmd
 import zlib
 import base64
 import time
+import json
+from datetime import datetime, timezone
 from functools import wraps
 
 from .Sensor import Sensor
@@ -32,13 +37,17 @@ from .utils import LcApiException
 from .utils import GET
 from .utils import POST
 from .utils import DELETE
+from .request_utils import getCurlCommandString
 
 from .Jobs import Job
+from . import __version__
 
 from limacharlie import GLOBAL_OID
 from limacharlie import GLOBAL_UID
 from limacharlie import GLOBAL_API_KEY
 from limacharlie import _getEnvironmentCreds
+
+from typing import Any, Optional, Callable
 
 ROOT_URL = 'https://api.limacharlie.io'
 API_VERSION = 'v1'
@@ -50,10 +59,24 @@ HTTP_TOO_MANY_REQUESTS = 429
 HTTP_GATEWAY_TIMEOUT = 504
 HTTP_OK = 200
 
+# Default function to call with debug messages.
+DEFAULT_PRINT_DEBUG_FN: Optional[Callable[[str], None]] = None
+
+def set_default_print_debug_fn( fn: Optional[Callable[[str], None]] = None ):
+    """
+    Set a default function to call with debug messages.
+
+    Args:
+        fn (function): the function to call with debug messages.
+    """
+    global DEFAULT_PRINT_DEBUG_FN
+    DEFAULT_PRINT_DEBUG_FN = fn
+
+
 class Manager( object ):
     '''General interface to a limacharlie.io Organization.'''
 
-    def __init__( self, oid = None, secret_api_key = None, environment = None, inv_id = None, print_debug_fn = None, is_interactive = False, extra_params = {}, jwt = None, uid = None, onRefreshAuth = None, isRetryQuotaErrors = False ):
+    def __init__( self, oid: Optional[str] = None, secret_api_key: Optional[str] = None, environment: Optional[str] = None, inv_id: Optional[str] = None, print_debug_fn: Optional[Callable[[str], None]] = None, is_interactive: bool = False, extra_params: dict[str, Any] = {}, jwt: Optional[str] = None, uid: Optional[str] = None, onRefreshAuth: Optional[Callable[[], None]] = None, isRetryQuotaErrors: bool = False ):
         '''Create a session manager for interaction with limacharlie.io, much of the Python API relies on this object.
 
         Args:
@@ -69,6 +92,8 @@ class Manager( object ):
             onRefreshAuth (func): if provided, function is called whenever a JWT would be refreshed using the API key.
             isRetryQuotaErrors (bool): if True, the Manager will attempt to retry queries when it gets an out-of-quota error (HTTP 429).
         '''
+        print_debug_fn = print_debug_fn or DEFAULT_PRINT_DEBUG_FN
+
         # If an environment is specified, try to get its creds.
         if environment is not None:
             oid, uid, secret_api_key = _getEnvironmentCreds( environment )
@@ -99,18 +124,18 @@ class Manager( object ):
         except:
             if jwt is None:
                 raise LcApiException( 'Invalid secret API key, should be in UUID format.' )
-        self._oid = oid
-        self._uid = uid if uid else None
-        self._onRefreshAuth = onRefreshAuth
-        self._secret_api_key = secret_api_key
-        self._jwt = jwt
-        self._debug = print_debug_fn
-        self._lastSensorListContinuationToken = None
-        self._inv_id = inv_id
-        self._spout = None
-        self._is_interactive = is_interactive
-        self._extra_params = extra_params
-        self._isRetryQuotaErrors = isRetryQuotaErrors
+        self._oid: Optional[str] = oid
+        self._uid: Optional[str] = uid if uid else None
+        self._onRefreshAuth: Optional[Callable[[], None]] = onRefreshAuth
+        self._secret_api_key: Optional[str] = secret_api_key
+        self._jwt: Optional[str] = jwt
+        self._debug: Callable[[str], None] = print_debug_fn
+        self._lastSensorListContinuationToken: Optional[str] = None
+        self._inv_id: Optional[str] = inv_id
+        self._spout: Optional[Spout] = None
+        self._is_interactive: bool = is_interactive
+        self._extra_params: dict[str, Any] = extra_params
+        self._isRetryQuotaErrors: bool = isRetryQuotaErrors
         if self._is_interactive:
             if not self._inv_id:
                 raise LcApiException( 'Investigation ID must be set for interactive mode to be enabled.' )
@@ -132,7 +157,8 @@ class Manager( object ):
 
     def _printDebug( self, msg ):
         if self._debug is not None:
-            self._debug( msg )
+            time_string = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+            self._debug( f"{time_string}: {msg}" )
 
     def _refreshJWT( self, expiry = None ):
         try:
@@ -153,10 +179,12 @@ class Manager( object ):
             self._jwt = json.loads( u.read().decode() )[ 'jwt' ]
             u.close()
         except Exception as e:
+            # TODO: Catch more specific exception
+            code = e.__dict__.get("code", None)
             self._jwt = None
-            raise LcApiException( 'Failed to get JWT from API key oid=%s uid=%s: %s' % ( self._oid, self._uid, e, ) )
+            raise LcApiException( 'Failed to get JWT from API key oid=%s uid=%s: %s' % ( self._oid, self._uid, e, ), code=code)
 
-    def _restCall( self, url, verb, params, altRoot = None, queryParams = None, rawBody = None, contentType = None, isNoAuth = False, timeout = None ):
+    def _restCall( self, url: str, verb: str, params: dict[str, Any] = {}, altRoot: Optional[str] = None, queryParams: Optional[dict[str, Any]] = None, rawBody: Optional[str] = None, contentType: Optional[str] = None, isNoAuth: bool = False, timeout: Optional[int] = None ) -> tuple[int, dict[str, Any]]:
         try:
             resp = None
             if not isNoAuth:
@@ -167,7 +195,10 @@ class Manager( object ):
             if altRoot is None:
                 url = '%s/%s/%s' % ( ROOT_URL, API_VERSION, url )
             else:
-                url = '%s/%s' % ( altRoot, url )
+                if url:
+                    url = '%s/%s' % ( altRoot, url )
+                else:
+                    url = altRoot
 
             if queryParams is not None:
                 url = '%s?%s' % ( url, urlencode( queryParams ) )
@@ -176,7 +207,7 @@ class Manager( object ):
                                   rawBody if rawBody is not None else urlencode( params, doseq = True ).encode(),
                                   headers = headers )
             request.get_method = lambda: verb
-            request.add_header( 'User-Agent', 'lc-py-api' )
+            request.add_header( 'User-Agent', 'lc-py-api/%s' % (__version__) )
             if contentType is not None:
                 request.add_header( 'Content-Type', contentType )
             u = urlopen( request, timeout = timeout )
@@ -190,6 +221,20 @@ class Manager( object ):
                 LcApiException( "Failed to decode data from API: %s" % e )
             u.close()
             ret = ( 200, resp )
+
+            # Prior to enforcement of rate limits, we return the headers
+            # in the response. Display the warning in stderr.
+            headers = u.getheaders()
+            quotaLimit = None
+            quotaPeriod = None
+            for header in headers:
+                if header[0] == 'X-RateLimit-Quota':
+                    quotaLimit = int(header[1])
+                if header[0] == 'X-RateLimit-Period':
+                    quotaPeriod = int(header[1])
+            if quotaLimit is not None or quotaPeriod is not None:
+                print(f"Warning: Rate limit hit, quota limit: {quotaLimit}, quota period: {quotaPeriod} seconds, see https://docs.limacharlie.io/v2/docs/en/api-keys?highlight=bulk", file=sys.stderr)
+
         except HTTPError as e:
             errorBody = e.read()
             try:
@@ -197,11 +242,20 @@ class Manager( object ):
             except:
                 ret = ( e.getcode(), errorBody )
 
-        self._printDebug( "%s: %s ( %s ) ==> %s ( %s )" % ( verb, url, str( params ), ret[ 0 ], str( ret[ 1 ] ) ) )
+        if rawBody:
+            body = rawBody.decode("utf-8")
+        else:
+            body = rawBody
+
+        self._printDebug("Request information:")
+        self._printDebug( "%s: %s ( params=%s,body=%s ) ==> %s ( %s )" % ( verb, url, body, str( params ), ret[ 0 ], str( ret[ 1 ] ) ) )
+        self._printDebug("cURL command:")
+        self._printDebug(getCurlCommandString(request=request))
 
         return ret
 
-    def _apiCall( self, url, verb, params = {}, altRoot = None, queryParams = None, rawBody = None, contentType = None, isNoAuth = False, nMaxTotalRetries = 3, timeout = 60 * 10 ):
+    # TODO: Fix mutable default (dict) in params
+    def _apiCall( self, url: str, verb: str, params: dict[str, Any] = {}, altRoot: Optional[str] = None, queryParams: Optional[dict[str, Any]] = None, rawBody: Optional[str] = None, contentType: Optional[str] = None, isNoAuth: bool = False, nMaxTotalRetries: int = 3, timeout: int = 60 * 10 ) -> dict[str, Any]:
         hasAuthRefreshed = False
         nRetries = 0
 
@@ -227,6 +281,11 @@ class Manager( object ):
                     if self._onRefreshAuth is not None:
                         self._onRefreshAuth( self )
                     else:
+                        if self._jwt is not None and self._secret_api_key is None:
+                            # This is a case where we likely initialized the manager with a JWT,
+                            # but no API key. In this case, we can't refresh the JWT, so we'll
+                            # just fail.
+                            raise LcApiException( 'Auth error and no API key available: oid=%s uid=%s: %s' % ( self._oid, self._uid, data, ), code=code)
                         self._refreshJWT()
                     continue
                 else:
@@ -349,6 +408,9 @@ class Manager( object ):
             'with_names' : True,
         }, altRoot = 'https://app.limacharlie.io/', isNoAuth = True )
         return resp
+
+    def getOrgInfo( self ) -> dict[str, Any]:
+        return self._apiCall( 'orgs/%s' % ( self._oid, ), GET, {} )
 
     def sensor( self, sid, inv_id = None, detailedInfo = None ):
         '''Get a Sensor object for the specific Sensor ID.
@@ -903,7 +965,7 @@ class Manager( object ):
         # Maintained for backwards compatibility post rename replicant => service.
         return self.serviceRequest( *args, **kwargs )
 
-    def extensionRequest( self, extensionName, action, data, isImpersonate = False ):
+    def extensionRequest( self, extensionName: str, action: str, data: dict[str, Any], isImpersonate: bool = False ) -> dict[str, Any]:
         '''Issue a request to an Extension.
 
         Args:
@@ -1159,7 +1221,7 @@ class Manager( object ):
         data = self._apiCall( 'orgs/%s/keys' % ( self._oid, ), GET, {} )
         return data.get( 'api_keys', None )
 
-    def addApiKey( self, keyName, permissions = [] ):
+    def addApiKey( self, keyName: str, permissions: list[str] = [], allowed_ip_range: Optional[str] = None ) -> dict[str, Any]:
         '''Add an API key to an organization.
 
         Args:
@@ -1168,13 +1230,16 @@ class Manager( object ):
         Returns:
             the secret value of the new API key.
         '''
-        data = self._apiCall( 'orgs/%s/keys' % ( self._oid, ), POST, {
+        req = {
             'key_name' : keyName,
             'perms' : ",".join( permissions ),
-        } )
+        }
+        if allowed_ip_range:
+            req['allowed_ip_range'] = allowed_ip_range
+        data = self._apiCall( 'orgs/%s/keys' % ( self._oid, ), POST, req )
         return data
 
-    def removeApiKey( self, keyHash ):
+    def removeApiKey( self, keyHash: str ):
         '''Remove an API key from an organization.
 
         Args:
@@ -1358,29 +1423,32 @@ class Manager( object ):
             'oid' : oid,
         } )
 
-    def getSchemas( self ):
+    def getSchemas( self, platform = None ):
         '''Get the list of all Schemas available for the Organization.
 
+        Args:
+            platform (str): optional platform name to filter the event types by.
+
         Returns:
-            a list of Schema names.
+            a dict containing the list of available schemas.
         '''
-
-        req = {}
-
-        resp = self._apiCall( 'orgs/%s/schema' % self._oid, GET, queryParams = req )
-        return resp
+        params = None
+        if platform is not None:
+            params = {
+                'platform' : platform,
+            }
+        return self._apiCall( 'orgs/%s/schema' % self._oid, GET, queryParams = params )
 
     def getSchema( self, name ):
         '''Get a specific Schema Definition.
 
+        Args:
+            name (str): name of the schema to get (e.g. 'evt:DNS_REQUEST').
+
         Returns:
-            a Schema Definition for the given Schema Name.
+            a dict containing the schema definition.
         '''
-
-        req = {}
-
-        resp = self._apiCall( 'orgs/%s/schema/%s' % ( self._oid, urlescape( name ) ), GET, queryParams = req )
-        return resp
+        return self._apiCall( 'orgs/%s/schema/%s' % ( self._oid, urlescape( name ) ), GET )
 
     def resetSchemas( self ):
         '''Reset the Schema Definition for all Schemas in an Organization.
@@ -1563,6 +1631,37 @@ class Manager( object ):
         '''
         data = self._apiCall( 'mitre/%s' % ( self._oid, ), GET, {} )
         return data
+    
+    def inviteUser( self, email ):
+        '''
+        Invite a user to LimaCharlie.
+
+        Args:
+            email (str): Email of the user to invite.
+        '''
+        data = self._apiCall( 'invite/user', POST, { "user_email": email } )
+        return data
+
+
+    def inviteUser( self, email ):
+        '''Invite a user to limacharlie.io.
+
+        Args:
+            email (str): the email of the user to invite.
+        '''
+        return self._apiCall( 'invite/user', POST, {
+            'user_email' : email,
+        } )
+    
+    def get_cve_list( self, product, version, include_details = False ):
+        '''Get the list of CVEs.
+
+        Returns:
+            the list of CVEs.
+        '''
+        return self._apiCall( 'cves/%s/%s' % ( urlescape( product ), urlescape( version ) ), GET, queryParams = {
+            'include_details' : 'true' if include_details else 'false',
+        }, altRoot = 'https://vulnerability-db-service-usa-1-532932106819.us-central1.run.app/' )
 
 def _eprint( msg ):
     sys.stderr.write( msg )

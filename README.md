@@ -23,7 +23,7 @@ in the REST API that you would like to use, let us know at support@limacharlie.i
 Authenticating to use the SDK / CLI can be done in a few ways.
 
 #### Logging In
-The simplest is to login to an organization using an [API key](https://doc.limacharlie.io/docs/documentation/docs/api_keys.md).
+The simplest is to login to an organization using an [API key](https://docs.limacharlie.io/docs/platform-management-api-keys).
 
 Use `limacharlie login` to store credentials locally. You will need an `OID` (Organization ID) and an API key, both
 of which you can get from the "REST API" section of the web interface.
@@ -42,6 +42,52 @@ You can use the `LC_OID` and `LC_API_KEY` and `LC_UID` environment variables to 
 the values used logging in. The environment variables will be used if no other credentials
 are specified.
 
+#### Credentials File
+When using `limacharle login` functionality, credentials are stored in a plain text format
+on a `~/.limacharlie` file on disk.
+
+Credentials are stored in the following format:
+
+```yaml
+# top level / default credentials
+api_key: xxx
+oid: xxx
+# optional, only needs to be set for user scopd api keys
+uid: xxx
+
+# Environment specific credentials which can be selected using "limacharlie use <environment>"
+# command. For example: "limacharlie use org-2".
+env:
+  org-1:
+    api_key: xxx
+    oid: xxx
+    # optional, only needs to be set for user scopd api keys
+    # uid: xxx
+  org-2:
+    api_key: xxx
+    oid: xxx
+    # optional, only needs to be set for user scopd api keys
+    # uid: xxx
+```
+
+If you manually manipulate this file, make sure you preserve the permissions and ownership
+as orginally set by the CLI (600) so other users can't read it.
+
+If you prefer not to store credentials in a plain text format in a file on disk, use an
+alternative method for authentication (e.g. environment variables, as described above).
+
+## Docker
+
+Docker image with latest version of the tool is available at https://hub.docker.com/r/refractionpoint/limacharlie.
+
+Example usage:
+
+```bash
+docker run refractionpoint/limacharlie:latest whoami
+
+# If you already have a credential file locally, you can mount it inside the Docker container
+docker run -v ${HOME}/.limacharlie:/root/.limacharlie:ro refractionpoint/limacharlie:latest whoami
+```
 ## SDK
 
 The root of the functionality in the SDK is from the `Manager` object. It holds the crendentials
@@ -130,16 +176,16 @@ the `request` function to receive replies through a `FutureResults` object or th
 `simpleRequest` to wait for the response and receive it as a return value.
 
 #### Artifacts
-The `Artifacts` is a helpful class to upload [Artifact Collection](https://doc.limacharlie.io/docs/documentation/docs/external_logs.md)
+The `Artifacts` is a helpful class to upload [Artifact Collection](https://docs.limacharlie.io/docs/telemetry-artifacts)
 to LimaCharlie without going through a sensor.
 
 #### Payloads
-The `Payloads` can be used to manage various executable [payloads](https://doc.limacharlie.io/docs/documentation/docs/payloads.md)
+The `Payloads` can be used to manage various executable [payloads](https://docs.limacharlie.io/docs/telemetry-sensors-payloads)
 accessible to sensors.
 
 #### Replay
-The `Replay` object allows you to interact with [Replay](https://doc.limacharlie.io/docs/documentation/docs/replay.md)
-jobs managed by LimaCharlie. These allow you to re-run [D&R Rules](https://doc.limacharlie.io/docs/documentation/docs/dr.md)
+The `Replay` object allows you to interact with [Replay](https://docs.limacharlie.io/docs/replay)
+jobs managed by LimaCharlie. These allow you to re-run [D&R Rules](https://docs.limacharlie.io/docs/platform-management-config-hive-dr-rules)
 on historical data.
 
 #### Search
@@ -228,17 +274,17 @@ Shortcut utility to perform IOC searches across all locally configured organizat
 
 #### Artifact Upload
 `limacharlie artifacts upload --help`
-Shortcut utility to upload [Artifact Collection](https://doc.limacharlie.io/docs/documentation/docs/external_logs.md) directly to
+Shortcut utility to upload [Artifact Collection](https://docs.limacharlie.io/docs/telemetry-artifacts) directly to
 LimaCharlie with just the CLI (no Agent).
 
 #### Artifact Download
 `limacharlie artifacts get_original --help`
-Shortcut utility to download [Artifact Collection](https://doc.limacharlie.io/docs/documentation/docs/external_logs.md) in
+Shortcut utility to download [Artifact Collection](https://docs.limacharlie.io/docs/telemetry-artifacts) in
 LimaCharlie locally.
 
 #### Replay
 `limacharlie replay --help`
-Shortcut utility to perform [Replay](https://doc.limacharlie.io/docs/documentation/docs/replay.md) jobs from the CLI.
+Shortcut utility to perform [Replay](https://docs.limacharlie.io/docs/replay) jobs from the CLI.
 
 #### Detection & Response
 `limacharlie dr --help`
@@ -249,7 +295,7 @@ Shortcut utility to manage Detection and Response rules over the CLI.
 Print out to STDOUT events or detections matching the parameter.
 
 #### List Sensors
-`limacharlie sensors 'plat == windows'`
+`limacharlie sensors --selector '*'`
 Print out all basic sensor information for all sensors matching the selector.
 
 #### Extension

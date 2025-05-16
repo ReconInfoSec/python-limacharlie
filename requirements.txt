@@ -2,3 +2,7 @@ requests
 passlib
 pyyaml
 tabulate
+termcolor
+pygments
+rich
+cryptography>=42.0.0,<44.0.1

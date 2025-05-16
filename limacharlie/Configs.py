@@ -981,6 +981,12 @@ def main( sourceArgs = None ):
                          action = 'store_true',
                          dest = 'isHiveQuery',
                          help = 'if specified, apply queries in hive from operations' )
+    parser.add_argument( '--hive-playbook',
+                         required = False,
+                         default = False,
+                         action = 'store_true',
+                         dest = 'isHivePlaybook',
+                         help = 'if specified, apply playbooks in hive from operations' )
     parser.add_argument( '--all',
                          required = False,
                          default = False,
@@ -1042,6 +1048,7 @@ def main( sourceArgs = None ):
         'isHiveLookup',
         'isHiveSecret',
         'isHiveQuery',
+        'isHivePlaybook',
     ]
 
     allHives = {
@@ -1055,6 +1062,7 @@ def main( sourceArgs = None ):
         'lookup': True,
         'secret': True,
         'query': True,
+        'playbook': True,
     }
 
     # If All is enabled, enable all types.
@@ -1093,6 +1101,8 @@ def main( sourceArgs = None ):
         hives['secret'] = True
     if args.isHiveQuery:
         hives['query'] = True
+    if args.isHivePlaybook:
+        hives['playbook'] = True
 
     s = Configs( oid = args.oid, env = args.environment, isDontUseInfraService = args.isDontUseInfraService, isUseExtension = args.isUseExtension )
 
